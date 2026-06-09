@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: assignment3
+data:
+  default.conf: |
+    upstream flask_api {
+        server flask-api:5000;
+    }
+    server {
+        listen 80;
+        server_name localhost;
+        location / {
+            proxy_pass http://flask_api;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
