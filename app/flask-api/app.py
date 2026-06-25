@@ -468,9 +468,9 @@ def dashboard():
         'top_restaurants': top_restaurants
     }), 200
 
-if __name__ == '__main__':
-    init_db()
-    app.run(host='0.0.0.0', port=5000)
+
+
+
 
 # ── Ratings ───────────────────────────────────────────────
 @app.route('/api/orders/<int:order_id>/rate', methods=['POST'])
@@ -589,3 +589,7 @@ def analytics():
         d['revenue'] = float(d['revenue'])
         d['date'] = str(d['date'])
     return jsonify({'overall_stats': stats, 'daily_breakdown': daily}), 200
+
+if __name__ == '__main__':
+    init_db()
+    app.run(host='0.0.0.0', port=5000)
