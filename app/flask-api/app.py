@@ -471,3 +471,121 @@ def dashboard():
 if __name__ == '__main__':
     init_db()
     app.run(host='0.0.0.0', port=5000)
+
+# ── Ratings ───────────────────────────────────────────────
+@app.route('/api/orders/<int:order_id>/rate', methods=['POST'])
+def rate_order(order_id):
+    data = request.get_json()
+    if not data or 'rating' not in data:
+        return jsonify({'error': 'rating required (1-5)'}), 400
+    rating = float(data['rating'])
+    if rating < 1 or rating > 5:
+        return jsonify({'error': 'rating must be between 1 and 5'}), 400
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute('SELECT rider_id, status FROM orders WHERE id = %s', (order_id,))
+    order = cursor.fetchone()
+    if not order:
+        cursor.close()
+        conn.close()
+        return jsonify({'error': 'Order not found'}), 404
+    if order['status'] != 'delivered':
+        cursor.close()
+        conn.close()
+        return jsonify({'error': 'Can only rate delivered orders'}), 400
+    cursor2 = conn.cursor()
+    if order['rider_id']:
+        cursor2.execute('''
+            UPDATE riders SET rating = ROUND((rating + %s) / 2, 1)
+            WHERE id = %s
+        ''', (rating, order['rider_id']))
+    cursor2.execute(
+        'INSERT INTO tracking_events (order_id, status, message) VALUES (%s, %s, %s)',
+        (order_id, 'rated', f'Customer rated the order {rating}/5')
+    )
+    conn.commit()
+    cursor.close()
+    cursor2.close()
+    conn.close()
+    return jsonify({'message': f'Order rated {rating}/5 successfully', 'order_id': order_id}), 200
+
+# ── Rider Leaderboard ─────────────────────────────────────
+@app.route('/api/leaderboard', methods=['GET'])
+def leaderboard():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute('''
+        SELECT name, city, total_deliveries, rating, status
+        FROM riders
+        ORDER BY total_deliveries DESC, rating DESC
+        LIMIT 10
+    ''')
+    riders = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    for r in riders:
+        r['rating'] = float(r['rating'])
+    return jsonify({'leaderboard': riders, 'total_riders': len(riders)}), 200
+
+# ── Search ────────────────────────────────────────────────
+@app.route('/api/search', methods=['GET'])
+def search():
+    city = request.args.get('city', '')
+    cuisine = request.args.get('cuisine', '')
+    min_rating = request.args.get('min_rating', 0)
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute('''
+        SELECT r.id, r.name, r.cuisine, r.city, r.rating,
+               COUNT(m.id) as menu_items_count
+        FROM restaurants r
+        LEFT JOIN menu_items m ON r.id = m.restaurant_id
+        WHERE r.city LIKE %s
+        AND r.cuisine LIKE %s
+        AND r.rating >= %s
+        AND r.is_open = 1
+        GROUP BY r.id
+        ORDER BY r.rating DESC
+    ''', (f'%{city}%', f'%{cuisine}%', min_rating))
+    results = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    for r in results:
+        r['rating'] = float(r['rating'])
+    return jsonify({'results': results, 'total_found': len(results)}), 200
+
+# ── Order Analytics ───────────────────────────────────────
+@app.route('/api/analytics', methods=['GET'])
+def analytics():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute('''
+        SELECT
+            COUNT(*) as total_orders,
+            COALESCE(SUM(total_amount), 0) as total_revenue,
+            COALESCE(AVG(total_amount), 0) as avg_order_value,
+            COUNT(CASE WHEN status = 'delivered' THEN 1 END) as delivered,
+            COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled,
+            COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending,
+            COUNT(CASE WHEN payment_method = 'cash' THEN 1 END) as cash_orders,
+            COUNT(CASE WHEN payment_method = 'card' THEN 1 END) as card_orders
+        FROM orders
+    ''')
+    stats = cursor.fetchone()
+    cursor.execute('''
+        SELECT DATE(created_at) as date, COUNT(*) as orders,
+               COALESCE(SUM(total_amount), 0) as revenue
+        FROM orders
+        GROUP BY DATE(created_at)
+        ORDER BY date DESC
+        LIMIT 7
+    ''')
+    daily = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    stats['total_revenue'] = float(stats['total_revenue'])
+    stats['avg_order_value'] = float(stats['avg_order_value'])
+    for d in daily:
+        d['revenue'] = float(d['revenue'])
+        d['date'] = str(d['date'])
+    return jsonify({'overall_stats': stats, 'daily_breakdown': daily}), 200
